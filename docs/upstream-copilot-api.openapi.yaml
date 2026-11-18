@@ -1,0 +1,785 @@
+openapi: 3.0.3
+info:
+  title: GitHub Copilot internal API (GitHub Enterprise Cloud, company.ghe.com)
+  version: 0.1.0
+  description: |
+    Reverse-engineered, UNOFFICIAL, undocumented. Paths come from the URL getters in VS Code's bundled
+    Copilot extension (extensions/copilot/dist/extension.js). `GET /copilot_internal/user`, `GET /_ping`, `GET /models`, `POST /v1/messages`, `POST /responses`,
+    `POST /embeddings` and `POST /v1/decisions` were verified against the live instance. Everything else is marked `x-verified: false`.
+    Request/response bodies for unverified operations are intentionally loose.
+
+    Auth flow: GitHub token (`Authorization: token <T>`) -> `GET /copilot_internal/v2/token` -> short-lived
+    Copilot token (`Authorization: Bearer <C>`) used on the Copilot API host. The `gh` CLI token was rejected
+    by `/v2/token` (401 Bad credentials); VS Code's own OAuth app token is expected to work.
+servers:
+  - url: https://api.company.ghe.com
+    description: GitHub API host (dotcom API URL)
+  - url: https://copilot-api.company.ghe.com
+    description: Copilot API host (CAPI) - value of endpoints.api from /copilot_internal/user
+  - url: https://copilot-proxy.company.ghe.com
+    description: Copilot proxy (completions) - value of endpoints.proxy
+  - url: https://copilot-telemetry-service.company.ghe.com
+    description: Telemetry - value of endpoints.telemetry
+  - url: https://origin-tracker.company.ghe.com
+    description: Origin tracker - value of endpoints.origin-tracker
+tags:
+  - name: copilot_internal
+  - name: capi
+  - name: agents
+  - name: other
+components:
+  securitySchemes:
+    githubToken:
+      type: apiKey
+      in: header
+      name: Authorization
+      description: "`token <github oauth token>`"
+    copilotToken:
+      type: http
+      scheme: bearer
+      description: Short-lived token from GET /copilot_internal/v2/token
+  parameters:
+    EditorVersion:
+      name: editor-version
+      in: header
+      schema: { type: string, example: vscode/1.100.0 }
+    EditorPluginVersion:
+      name: editor-plugin-version
+      in: header
+      schema: { type: string, example: copilot-chat/0.26.7 }
+    UserAgent:
+      name: User-Agent
+      in: header
+      schema: { type: string, example: GitHubCopilotChat/0.26.7 }
+    ApiVersion:
+      name: X-GitHub-Api-Version
+      in: header
+      schema: { type: string, example: "2025-04-01" }
+    IntegrationId:
+      name: Copilot-Integration-Id
+      in: header
+      schema: { type: string, example: vscode-chat }
+    Owner:
+      name: owner
+      in: path
+      required: true
+      schema: { type: string }
+    Repo:
+      name: repo
+      in: path
+      required: true
+      schema: { type: string }
+    OrgLogin:
+      name: orgLogin
+      in: path
+      required: true
+      schema: { type: string }
+    ModelId:
+      name: modelId
+      in: path
+      required: true
+      schema: { type: string }
+  schemas:
+    QuotaSnapshot:
+      type: object
+      properties:
+        quota_id: { type: string }
+        entitlement: { type: number }
+        remaining: { type: number }
+        quota_remaining: { type: number }
+        percent_remaining: { type: number }
+        unlimited: { type: boolean }
+        has_quota: { type: boolean }
+        overage_count: { type: number }
+        overage_permitted: { type: boolean }
+        overage_entitlement: { type: number }
+        credits_used: { type: number }
+        token_based_billing: { type: boolean }
+        quota_reset_at: { type: number }
+        timestamp_utc: { type: string, format: date-time }
+    CopilotUser:
+      type: object
+      x-verified: true
+      properties:
+        id: { type: integer }
+        login: { type: string }
+        access_type_sku: { type: string, example: copilot_for_business_seat_quota }
+        analytics_tracking_id: { type: string }
+        assigned_date: { type: string, format: date-time }
+        can_signup_for_limited: { type: boolean }
+        can_upgrade_plan: { type: boolean }
+        chat_enabled: { type: boolean }
+        cli_enabled: { type: boolean }
+        cli_remote_control_enabled: { type: boolean }
+        cloud_sessions_enabled: { type: boolean }
+        cloud_session_storage_enabled: { type: boolean }
+        copilot_app_enabled: { type: boolean }
+        copilotignore_enabled: { type: boolean }
+        copilot_plan: { type: string, example: business }
+        editor_preview_features_enabled: { type: boolean }
+        enterprise_usage_telemetry: { type: boolean }
+        is_mcp_enabled: { type: boolean }
+        is_staff: { type: boolean }
+        restricted_telemetry: { type: boolean }
+        te: { type: boolean }
+        token_based_billing: { type: boolean }
+        enterprise_list:
+          type: array
+          items: { type: object, properties: { id: { type: integer } } }
+        organization_login_list: { type: array, items: { type: string } }
+        organization_list: { type: array, items: { type: object } }
+        endpoints:
+          type: object
+          properties:
+            api: { type: string, format: uri }
+            origin-tracker: { type: string, format: uri }
+            proxy: { type: string, format: uri }
+            telemetry: { type: string, format: uri }
+        quota_reset_date: { type: string, format: date }
+        quota_reset_date_utc: { type: string, format: date-time }
+        quota_snapshots:
+          type: object
+          properties:
+            chat: { $ref: "#/components/schemas/QuotaSnapshot" }
+            completions: { $ref: "#/components/schemas/QuotaSnapshot" }
+            premium_interactions: { $ref: "#/components/schemas/QuotaSnapshot" }
+    CopilotToken:
+      type: object
+      x-verified: false
+      properties:
+        token: { type: string }
+        expires_at: { type: integer }
+        refresh_in: { type: integer }
+        endpoints:
+          type: object
+          properties:
+            api: { type: string }
+            proxy: { type: string }
+            telemetry: { type: string }
+            origin-tracker: { type: string }
+    Model:
+      type: object
+      x-verified: false
+      properties:
+        id: { type: string }
+        name: { type: string }
+        vendor: { type: string }
+        version: { type: string }
+        preview: { type: boolean }
+        model_picker_enabled: { type: boolean }
+        capabilities:
+          type: object
+          properties:
+            family: { type: string }
+            type: { type: string }
+            limits:
+              type: object
+              properties:
+                max_context_window_tokens: { type: integer }
+                max_prompt_tokens: { type: integer }
+                max_output_tokens: { type: integer }
+    ModelList:
+      type: object
+      properties:
+        data: { type: array, items: { $ref: "#/components/schemas/Model" } }
+    ChatMessage:
+      type: object
+      properties:
+        role: { type: string, enum: [system, user, assistant, tool] }
+        content: { type: string }
+    ChatRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model: { type: string }
+        messages: { type: array, items: { $ref: "#/components/schemas/ChatMessage" } }
+        stream: { type: boolean }
+        temperature: { type: number }
+        max_tokens: { type: integer }
+        tools: { type: array, items: { type: object } }
+    DecisionQuestion:
+      type: object
+      required: [type, name, instructions]
+      x-verified: true
+      properties:
+        type: { type: string, enum: [predicate, choice, score] }
+        name: { type: string, description: Unique name echoed in the answer }
+        instructions:
+          description: Text, or an array of input_text / input_image parts
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: object }
+        choices:
+          type: array
+          description: Required for type=choice
+          items:
+            type: object
+            properties:
+              value: { type: string }
+              description: { type: string }
+        levels:
+          type: array
+          description: Required for type=score (2-10 ordered levels, lowest first)
+          minItems: 2
+          maxItems: 10
+          items:
+            type: object
+            properties:
+              label: { type: string }
+              description: { type: string }
+    DecisionRequest:
+      type: object
+      required: [model, input, questions]
+      x-verified: true
+      properties:
+        model:
+          type: string
+          description: Copilot id gpt-6-luna-decisions (gpt-6-luna returns 400 model_not_supported upstream)
+          example: gpt-6-luna-decisions
+        input:
+          description: Shared evidence - a string, or an ordered array of messages / tool calls / tool outputs
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: object }
+        questions:
+          type: array
+          minItems: 1
+          maxItems: 400
+          items: { $ref: "#/components/schemas/DecisionQuestion" }
+    DecisionProbability:
+      type: object
+      properties:
+        value: {}
+        label: { type: string }
+        probability: { type: number }
+    DecisionAnswer:
+      type: object
+      x-verified: true
+      properties:
+        type: { type: string, enum: [predicate, choice, score, refusal] }
+        name: { type: string }
+        probability: { type: number, description: predicate - estimate 0..1 that the condition is true }
+        choice: { description: choice - one of the supplied values }
+        score: { type: number, description: score - probability-weighted average of level indices }
+        probabilities:
+          type: array
+          items: { $ref: "#/components/schemas/DecisionProbability" }
+        confidence: { type: number }
+    DecisionResponse:
+      type: object
+      x-verified: true
+      properties:
+        model: { type: string, example: gpt-6-luna }
+        answers:
+          type: array
+          items: { $ref: "#/components/schemas/DecisionAnswer" }
+        usage:
+          type: object
+          properties:
+            input_tokens: { type: integer }
+            output_tokens: { type: integer }
+            total_tokens: { type: integer }
+            input_tokens_details:
+              type: object
+              properties:
+                cached_tokens: { type: integer }
+                cache_write_tokens: { type: integer }
+            output_tokens_details:
+              type: object
+              properties:
+                reasoning_tokens: { type: integer }
+    EmbeddingRequest:
+      type: object
+      required: [model, input]
+      x-verified: true
+      properties:
+        model:
+          type: string
+          enum: [text-embedding-3-small, text-embedding-3-small-inference, text-embedding-ada-002]
+        input:
+          type: array
+          description: Must be an array. A plain string returns a plain-text 400 "Bad Request".
+          items: { type: string }
+    EmbeddingResponse:
+      type: object
+      x-verified: true
+      properties:
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              embedding: { type: array, items: { type: number } }
+              index: { type: integer }
+        usage:
+          type: object
+          properties:
+            prompt_tokens: { type: integer }
+            total_tokens: { type: integer }
+    Generic:
+      type: object
+      additionalProperties: true
+    Error:
+      type: object
+      properties:
+        message: { type: string }
+        documentation_url: { type: string }
+        status: { type: string }
+  responses:
+    Unauthorized:
+      description: Missing or bad credentials
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    Unverified:
+      description: Unverified response (shape inferred from client code only)
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Generic" }
+paths:
+  /copilot_internal/user:
+    servers: [{ url: "https://api.company.ghe.com" }]
+    get:
+      tags: [copilot_internal]
+      summary: Current user's Copilot entitlement, quotas and service endpoints
+      x-verified: true
+      security: [{ githubToken: [] }]
+      parameters:
+        - $ref: "#/components/parameters/EditorVersion"
+        - $ref: "#/components/parameters/EditorPluginVersion"
+        - $ref: "#/components/parameters/UserAgent"
+        - $ref: "#/components/parameters/ApiVersion"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CopilotUser" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /copilot_internal/v2/token:
+    servers: [{ url: "https://api.company.ghe.com" }]
+    get:
+      tags: [copilot_internal]
+      summary: Exchange GitHub token for a short-lived Copilot token
+      x-verified: false
+      description: Returned 401 Bad credentials for a `gh` CLI token.
+      security: [{ githubToken: [] }]
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/CopilotToken" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /copilot_internal/v2/nltoken:
+    servers: [{ url: "https://api.company.ghe.com" }]
+    get:
+      tags: [copilot_internal]
+      summary: Token variant not requiring authentication (tokenNoAuthURL)
+      x-verified: false
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /copilot_internal/content_exclusion:
+    servers: [{ url: "https://api.company.ghe.com" }]
+    get:
+      tags: [copilot_internal]
+      summary: Content exclusion rules
+      x-verified: false
+      security: [{ githubToken: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /copilot_internal/managed_settings:
+    servers: [{ url: "https://api.company.ghe.com" }]
+    get:
+      tags: [copilot_internal]
+      summary: Org-managed settings
+      x-verified: false
+      security: [{ githubToken: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /copilot_internal/subscribe_limited_user:
+    servers: [{ url: "https://api.company.ghe.com" }]
+    post:
+      tags: [copilot_internal]
+      summary: Sign up for the free/limited tier (mutates account state - do not call)
+      x-verified: false
+      security: [{ githubToken: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /copilot_internal/org_custom_instructions/{orgLogin}:
+    servers: [{ url: "https://api.company.ghe.com" }]
+    get:
+      tags: [copilot_internal]
+      summary: Org-level custom instructions
+      x-verified: false
+      security: [{ githubToken: [] }]
+      parameters:
+        - $ref: "#/components/parameters/OrgLogin"
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /repos/{owner}/{repo}/copilot_internal/embeddings_index:
+    servers: [{ url: "https://api.company.ghe.com" }]
+    get:
+      tags: [copilot_internal]
+      summary: Repo embeddings index metadata
+      x-verified: false
+      security: [{ githubToken: [] }]
+      parameters:
+        - $ref: "#/components/parameters/Owner"
+        - $ref: "#/components/parameters/Repo"
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /repos/{owner}/{repo}/copilot_internal/coding_guidelines:
+    servers: [{ url: "https://api.company.ghe.com" }]
+    get:
+      tags: [copilot_internal]
+      summary: Repo coding guidelines
+      x-verified: false
+      security: [{ githubToken: [] }]
+      parameters:
+        - $ref: "#/components/parameters/Owner"
+        - $ref: "#/components/parameters/Repo"
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /dotcom/embeddings:
+    servers: [{ url: "https://api.company.ghe.com" }]
+    get:
+      tags: [other]
+      summary: "Dotcom embeddings (unverified). Real URL on api.company.ghe.com is /embeddings; prefixed /dotcom here only to avoid a path clash with the Copilot API host"
+      x-verified: false
+      security: [{ githubToken: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /dotcom/embeddings/models:
+    servers: [{ url: "https://api.company.ghe.com" }]
+    get:
+      tags: [other]
+      summary: Embedding models (embeddingsModelURL)
+      x-verified: false
+      security: [{ githubToken: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /dotcom/embeddings/code/search:
+    servers: [{ url: "https://api.company.ghe.com" }]
+    post:
+      tags: [other]
+      summary: Code search via embeddings (embeddingsCodeSearchURL)
+      x-verified: false
+      security: [{ githubToken: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Generic" }
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /dotcom/chunks:
+    servers: [{ url: "https://api.company.ghe.com" }]
+    post:
+      tags: [other]
+      summary: Chunking (chunksURL)
+      x-verified: false
+      security: [{ githubToken: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Generic" }
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /cmc_internal/api/agents:
+    servers: [{ url: "https://api.company.ghe.com" }]
+    get:
+      tags: [agents]
+      summary: Copilot agent tasks (copilotAgentTasksURL)
+      x-verified: false
+      security: [{ githubToken: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /_ping:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    get:
+      tags: [capi]
+      summary: Health check
+      x-verified: true
+      description: Returned 200 (2-byte body) without credentials.
+      responses:
+        "200": { description: OK }
+  /models:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    get:
+      tags: [capi]
+      summary: List available models
+      x-verified: true
+      description: Needs Copilot bearer token. Without it returns 400 "Authorization header is badly formatted".
+      security: [{ copilotToken: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IntegrationId"
+        - $ref: "#/components/parameters/EditorVersion"
+        - $ref: "#/components/parameters/EditorPluginVersion"
+        - $ref: "#/components/parameters/UserAgent"
+        - $ref: "#/components/parameters/ApiVersion"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelList" }
+  /models/{modelId}:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    get:
+      tags: [capi]
+      summary: Single model
+      x-verified: false
+      security: [{ copilotToken: [] }]
+      parameters:
+        - $ref: "#/components/parameters/ModelId"
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Model" }
+  /models/session:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    post:
+      tags: [capi]
+      summary: Auto-model session (capiAutoModelURL)
+      x-verified: false
+      security: [{ copilotToken: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Generic" }
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /models/session/intent:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    post:
+      tags: [capi]
+      summary: Model router / intent (capiModelRouterURL)
+      x-verified: false
+      security: [{ copilotToken: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Generic" }
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /auto:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    get:
+      tags: [capi]
+      summary: Auto (capiAutoURL)
+      x-verified: false
+      security: [{ copilotToken: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /chat/completions:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    post:
+      tags: [capi]
+      summary: OpenAI-style chat completions (spends credits)
+      x-verified: false
+      security: [{ copilotToken: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IntegrationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatRequest" }
+      responses:
+        "200":
+          description: JSON or SSE stream
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Generic" }
+            text/event-stream:
+              schema: { type: string }
+  /responses:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    post:
+      tags: [capi]
+      summary: OpenAI Responses-style API (spends credits)
+      x-verified: true
+      security: [{ copilotToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Generic" }
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /v1/messages:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    post:
+      tags: [capi]
+      summary: Anthropic-style messages API (spends credits)
+      x-verified: true
+      security: [{ copilotToken: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Generic" }
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /embeddings:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    post:
+      tags: [capi]
+      summary: Create embeddings (Copilot API host)
+      x-verified: true
+      description: |
+        Verified live with a Copilot bearer token. `input` must be an array; the proxy wraps a string into an array.
+        Returned 1536-dimension vectors for text-embedding-3-small. Not to be confused with the unverified
+        dotcom `/embeddings` on api.company.ghe.com (see `/dotcom/embeddings`).
+      security: [{ copilotToken: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IntegrationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/EmbeddingRequest" }
+            example: { model: text-embedding-3-small, input: [hello world] }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/EmbeddingResponse" }
+        "400":
+          description: Bad request (for example a string input)
+  /v1/decisions:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    post:
+      tags: [capi]
+      summary: OpenAI Decisions API - typed answers (predicate / choice / score)
+      x-verified: true
+      description: |
+        Verified live. Requires `questions`; without it the upstream returns a plain-text 400 "Bad Request".
+        GET returns 405. Output tokens are not charged. Model must be the Copilot id `gpt-6-luna-decisions`.
+        Body shape follows https://developers.openai.com/api/docs/guides/decisions.
+      security: [{ copilotToken: [] }]
+      parameters:
+        - $ref: "#/components/parameters/IntegrationId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DecisionRequest" }
+            example:
+              model: gpt-6-luna-decisions
+              input: I was charged twice for my order.
+              questions:
+                - type: choice
+                  name: department
+                  instructions: Which department should handle this complaint?
+                  choices:
+                    - { value: billing, description: Payments, invoices, and refunds. }
+                    - { value: shipping, description: Delivery and tracking. }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DecisionResponse" }
+        "400":
+          description: Bad request (missing questions, or model_not_supported)
+  /skills:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    get:
+      tags: [capi]
+      summary: List skills (listSkillsURL)
+      x-verified: false
+      security: [{ copilotToken: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /search:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    post:
+      tags: [capi]
+      summary: Skill search (searchSkillURL)
+      x-verified: false
+      security: [{ copilotToken: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Generic" }
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /agents:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    get:
+      tags: [agents]
+      summary: Remote agents (remoteAgentsURL)
+      x-verified: false
+      security: [{ copilotToken: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /agents/sessions:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    get:
+      tags: [agents]
+      summary: Cloud agent sessions (copilotAgentSessionsURL)
+      x-verified: false
+      security: [{ copilotToken: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /agents/swe:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    post:
+      tags: [agents]
+      summary: Coding agent jobs (copilotAgentJobsURL)
+      x-verified: false
+      security: [{ copilotToken: [] }]
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Generic" }
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /agents/swe/models:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    get:
+      tags: [agents]
+      summary: Coding agent models (CCAModelsURL)
+      x-verified: false
+      description: Returned 401 "Unauthorized" with no/incorrect Copilot token.
+      security: [{ copilotToken: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /agents/swe/custom-agents:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    get:
+      tags: [agents]
+      summary: Custom agents (copilotCustomAgentsURL)
+      x-verified: false
+      security: [{ copilotToken: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /agents/swe/internal/memory/v0:
+    servers: [{ url: "https://copilot-api.company.ghe.com" }]
+    get:
+      tags: [agents]
+      summary: Agent memory (copilotAgentMemoryURL)
+      x-verified: false
+      security: [{ copilotToken: [] }]
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }
+  /telemetry:
+    servers: [{ url: "https://copilot-telemetry-service.company.ghe.com" }]
+    post:
+      tags: [other]
+      summary: Telemetry ingest (telemetryURL)
+      x-verified: false
+      requestBody:
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Generic" }
+      responses:
+        "200": { $ref: "#/components/responses/Unverified" }

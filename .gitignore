@@ -1,0 +1,21 @@
+# deps
+node_modules/
+
+# local env
+*.local
+.npmrc
+
+# aider
+.aider*
+
+# eslint cache
+.eslintcache
+
+# build output
+dist/
+
+# tarballs
+*.tgz
+
+# local credentials (docker volume holding the GitHub token)
+copilot-data/

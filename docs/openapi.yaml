@@ -1,0 +1,304 @@
+openapi: 3.0.3
+info:
+  title: copilot-api-ghe proxy
+  version: 0.7.0
+  description: |
+    OpenAI and Anthropic compatible API served by the copilot-api-ghe proxy in front of GitHub Copilot
+    (github.com, GHE Cloud or GHES, chosen with `--host`). This describes the proxy's own surface (what your client calls), not the
+    upstream Copilot API. For the reverse-engineered upstream see `upstream-copilot-api.openapi.yaml`.
+
+    - The proxy does not check API keys. Send any value.
+    - Each model lists the upstream endpoints it supports in `supported_endpoints` (GET /v1/models).
+    - Routes are also mounted without the `/v1` prefix (for example `/chat/completions`).
+    - Request bodies are forwarded to Copilot largely unchanged; the schemas below list the commonly used fields only.
+servers:
+  - url: http://localhost:4141
+tags:
+  - name: inference
+  - name: models
+  - name: account
+  - name: meta
+paths:
+  /v1/chat/completions:
+    post:
+      tags: [inference]
+      summary: OpenAI Chat Completions
+      description: |
+        Forwarded to Copilot `/chat/completions`. Returns 400 (invalid_request_error) naming the supported endpoints
+        when the model does not support chat completions (for example GPT-5/6, which only support `/responses`).
+        Supports `stream: true` (server-sent events).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ChatRequest" }
+      responses:
+        "200": { description: "OpenAI chat completion, or an SSE stream" }
+        "400": { $ref: "#/components/responses/Error" }
+  /v1/messages:
+    post:
+      tags: [inference]
+      summary: Anthropic Messages
+      description: |
+        Models whose `supported_endpoints` include `/v1/messages` (Claude) are forwarded natively, including
+        streaming, tool use and the extra `copilot_usage` block. All other models are translated to chat completions
+        and the response is translated back. `anthropic-version` and `anthropic-beta` headers are forwarded.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MessagesRequest" }
+      responses:
+        "200": { description: "Anthropic message, or an SSE stream" }
+        "400": { $ref: "#/components/responses/Error" }
+  /v1/messages/count_tokens:
+    post:
+      tags: [inference]
+      summary: Estimate input tokens for an Anthropic request
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/MessagesRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  input_tokens: { type: integer }
+  /v1/responses:
+    post:
+      tags: [inference]
+      summary: OpenAI Responses
+      description: Native passthrough to Copilot `/responses`. Models that do not support it (for example Claude) get a 400. WebSocket `/responses` is not supported.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/ResponsesRequest" }
+      responses:
+        "200": { description: "OpenAI response object, or an SSE stream" }
+        "400": { $ref: "#/components/responses/Error" }
+  /v1/decisions:
+    post:
+      tags: [inference]
+      summary: OpenAI Decisions
+      description: |
+        Typed answers (predicate, choice, score) with no generated text. The OpenAI model name `gpt-6-luna` is
+        mapped to the Copilot id `gpt-6-luna-decisions`. `questions` is required (the upstream returns a plain-text
+        400 without it). Output tokens are not charged.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/DecisionRequest" }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/DecisionResponse" }
+        "400": { $ref: "#/components/responses/Error" }
+  /v1/embeddings:
+    post:
+      tags: [inference]
+      summary: Embeddings
+      description: A string `input` is wrapped into an array before forwarding, because the upstream rejects strings.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [model, input]
+              properties:
+                model: { type: string, example: text-embedding-3-small }
+                input:
+                  oneOf:
+                    - type: string
+                    - type: array
+                      items: { type: string }
+      responses:
+        "200": { description: OpenAI embeddings response }
+  /v1/models:
+    get:
+      tags: [models]
+      summary: List models
+      description: OpenAI-style model list, extended with Copilot metadata.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ModelList" }
+  /usage:
+    get:
+      tags: [account]
+      summary: Copilot quota and entitlement
+      description: Passes through GitHub's `/copilot_internal/user` response for the signed-in user.
+      responses:
+        "200": { description: Copilot user and quota snapshots }
+  /token:
+    get:
+      tags: [account]
+      summary: Current Copilot token
+      description: Returns 403 unless the server was started with `--show-token`.
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  token: { type: string }
+        "403": { $ref: "#/components/responses/Error" }
+  /dashboard:
+    get:
+      tags: [meta]
+      summary: Web dashboard (HTML)
+      responses:
+        "200": { description: HTML page }
+  /openapi.yaml:
+    get:
+      tags: [meta]
+      summary: This document
+      responses:
+        "200": { description: OpenAPI YAML }
+  /:
+    get:
+      tags: [meta]
+      summary: Health check
+      responses:
+        "200": { description: "Plain text: Server running" }
+components:
+  responses:
+    Error:
+      description: Error
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: object
+                properties:
+                  message: { type: string }
+                  type: { type: string }
+  schemas:
+    ChatRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model: { type: string }
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              role: { type: string, enum: [system, user, assistant, tool] }
+              content: {}
+        max_tokens: { type: integer }
+        stream: { type: boolean }
+        temperature: { type: number }
+        tools: { type: array, items: { type: object } }
+    MessagesRequest:
+      type: object
+      required: [model, max_tokens, messages]
+      properties:
+        model: { type: string }
+        max_tokens: { type: integer }
+        stream: { type: boolean }
+        system: {}
+        messages:
+          type: array
+          items:
+            type: object
+            properties:
+              role: { type: string, enum: [user, assistant] }
+              content: {}
+        tools: { type: array, items: { type: object } }
+    ResponsesRequest:
+      type: object
+      required: [model, input]
+      properties:
+        model: { type: string }
+        input: {}
+        max_output_tokens: { type: integer }
+        stream: { type: boolean }
+    DecisionRequest:
+      type: object
+      required: [model, input, questions]
+      properties:
+        model: { type: string, example: gpt-6-luna }
+        input: {}
+        questions:
+          type: array
+          minItems: 1
+          maxItems: 400
+          items:
+            type: object
+            required: [type, name, instructions]
+            properties:
+              type: { type: string, enum: [predicate, choice, score] }
+              name: { type: string }
+              instructions: {}
+              choices:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    value: { type: string }
+                    description: { type: string }
+              levels:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    label: { type: string }
+                    description: { type: string }
+    DecisionResponse:
+      type: object
+      properties:
+        model: { type: string }
+        answers:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string, enum: [predicate, choice, score, refusal] }
+              name: { type: string }
+              probability: { type: number }
+              choice: {}
+              score: { type: number }
+              confidence: { type: number }
+              probabilities: { type: array, items: { type: object } }
+        usage: { type: object }
+    Model:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, example: model }
+        owned_by: { type: string }
+        display_name: { type: string }
+        supported_endpoints:
+          type: array
+          items: { type: string }
+          description: Upstream endpoints the model supports. Absent for legacy Azure OpenAI models (chat completions in practice).
+        capability_type:
+          type: string
+          description: Copilot capability type (chat, embeddings, completion, decisions)
+        capabilities:
+          type: object
+          description: Copilot capabilities object (limits, supports, tokenizer, family)
+    ModelList:
+      type: object
+      properties:
+        object: { type: string, example: list }
+        has_more: { type: boolean }
+        data:
+          type: array
+          items: { $ref: "#/components/schemas/Model" }
